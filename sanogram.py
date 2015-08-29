@@ -1,8 +1,8 @@
 #!env python
 # sanogram.py - convert image to a Tokyo Olympic Logo
 # notice: limited for personal use. output image is a modification of the input image and
-#         some extremely basic parts (like circles, fans, boxes) and users should be aware 
-#         of copyrights of those images.
+#         some extremely basic parts (like circles, fans, boxes), and users should be aware 
+#         of copyrights of those images. use at your own risk.
 #
 # License: Public Domain
 
@@ -23,15 +23,16 @@ COLOR_SILVER = hex2rgbfloat('#A5A5A5')
 COLOR_BG     = hex2rgbfloat('#FFFFFF')
 
 class SanoElement(object):
-    def __init__(self, size_px, color, type_name, is_original):
+    def __init__(self, size_px, color, color_bg, type_name, is_original):
         self.size_px = size_px
         self.color = color
+        self.color_bg = color_bg
         self.type_name = type_name
         self.patch = np.zeros((size_px, size_px, 3), dtype=np.float32)
         shape = SanoElement.create_shape(size_px, type_name, is_original)
         self.shape = shape
         self.patch[shape] = color
-        self.patch[~shape] = COLOR_BG
+        self.patch[~shape] = color_bg
         self.is_background = (type_name == 'BG')
     @classmethod
     def create_shape(cls, w, type_name, is_original):
@@ -60,11 +61,11 @@ class SanoElement(object):
 
 class SanoElementSet(object):
     def __init__(self, size_px, is_original):
-        e_LT = SanoElement(size_px, COLOR_GOLD, 'LT', is_original)
-        e_RB = SanoElement(size_px, COLOR_SILVER, 'RB', is_original)
-        e_BX = SanoElement(size_px, COLOR_BLACK, 'BX', is_original)
-        e_RN = SanoElement(size_px, COLOR_RED, 'RN', is_original)
-        e_BG = SanoElement(size_px, COLOR_BG, 'BG', is_original)
+        e_LT = SanoElement(size_px, COLOR_GOLD, COLOR_BG, 'LT', is_original)
+        e_RB = SanoElement(size_px, COLOR_SILVER, COLOR_BG, 'RB', is_original)
+        e_BX = SanoElement(size_px, COLOR_BLACK, COLOR_BG, 'BX', is_original)
+        e_RN = SanoElement(size_px, COLOR_RED, COLOR_BG, 'RN', is_original)
+        e_BG = SanoElement(size_px, COLOR_BG, COLOR_BG, 'BG', is_original)
         self.elements = [e_LT, e_RB, e_BX, e_RN, e_BG]
         self.patches = [e.patch for e in self.elements]
         self.shapes = [e.shape for e in self.elements]
