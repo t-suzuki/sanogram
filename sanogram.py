@@ -8,6 +8,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import sklearn.cluster
 
 # --------------------------------------------------------------------------------
 # patch elements.
@@ -31,6 +32,7 @@ class SanoElement(object):
         self.shape = shape
         self.patch[shape] = color
         self.patch[~shape] = COLOR_BG
+        self.is_background = (type_name == 'BG')
     @classmethod
     def create_shape(cls, w, type_name, is_original):
         shape_patch = np.ndarray((w, w), dtype=np.bool)
@@ -66,6 +68,8 @@ class SanoElementSet(object):
         self.elements = [e_LT, e_RB, e_BX, e_RN, e_BG]
         self.patches = [e.patch for e in self.elements]
         self.shapes = [e.shape for e in self.elements]
+        self.background_color = COLOR_BG
+        self.block_px = size_px
 
 # --------------------------------------------------------------------------------
 # catalogue of error function to find optimal patch.
@@ -82,7 +86,8 @@ ERROR_FUNCS = {
         }
 
 # --------------------------------------------------------------------------------
-def create_sanogram(img, grid_size, error_func):
+def create_sanogram(elements_set, img, error_func, replace_color=None, n_colors=5):
+    grid_size = elements_set.block_px
     # block coordinates
     h, w = img.shape[:2]
     blocks = []
@@ -90,28 +95,57 @@ def create_sanogram(img, grid_size, error_func):
         for ix in range(w/grid_size):
             by, bx = iy*grid_size, ix*grid_size
             ey, ex = min(h, by+grid_size), min(w, bx+grid_size)
-            blocks.append((iy, ix, by, bx, ey, ex))
+            if (ey-by < grid_size) or (ex-bx < grid_size): continue
+            patch = img[by:ey, bx:ex]
+            blocks.append((iy, ix, by, bx, ey, ex, patch))
     bh, bw = iy+1, ix+1
     # init labels unassigned.
     labels = np.ndarray((bh, bw), dtype=np.int32)
     labels[:, :] = -1
-    # elements
-    sano = SanoElementSet(grid_size, False)
     # find best patches
     h, w = img.shape[:2]
-    for iy, ix, by, bx, ey, ex in blocks:
-        if (ey-by < grid_size) or (ex-bx < grid_size): continue
-        patch = img[by:ey, bx:ex]
-        errors = [error_func(patch, elem) for i, elem in enumerate(sano.elements)]
+    for iy, ix, by, bx, ey, ex, patch in blocks:
+        errors = [error_func(patch, elem) for i, elem in enumerate(elements_set.elements)]
         min_idx = np.argmin(errors)
         labels[iy, ix] = min_idx
+    # determine the new color
+    if replace_color == 'direct':
+        # use mean color of the target patch directly.
+        color_map = np.ndarray((bh, bw, 3), dtype=img.dtype)
+        for iy, ix, by, bx, ey, ex, patch in blocks:
+            label = labels[iy, ix]
+            if not elements_set.elements[label].is_background:
+                mean_color = patch[elements_set.elements[label].shape].mean(axis=0)
+                color_map[iy, ix] = mean_color
+    elif replace_color == 'representative':
+        # find <n_colors> representative colors from the input image and use the nearest one for each patch.
+        colors = img.reshape((-1, 3))
+        cluster = sklearn.cluster.KMeans(n_clusters=n_colors)
+        cluster.fit(colors)
+        # assign colors
+        color_map = np.ndarray((bh, bw, 3), dtype=img.dtype)
+        for iy, ix, by, bx, ey, ex, patch in blocks:
+            label = labels[iy, ix]
+            if not elements_set.elements[label].is_background:
+                representative_index = cluster.predict((patch[elements_set.elements[label].shape]).mean(axis=0))
+                color_map[iy, ix] = cluster.cluster_centers_[representative_index]
+    elif replace_color is None:
+        # color is associated to the patch shape according to elements_set.
+        color_map = None
+    else:
+        color_map = None
+        print 'unknown replace_color=%s' % replace_color
+
     # apply labels
     res_img = np.zeros_like(img) + COLOR_BG
-    for iy, ix, by, bx, ey, ex in blocks:
-        if (ey-by < grid_size) or (ex-bx < grid_size): continue
+    for iy, ix, by, bx, ey, ex, patch in blocks:
         label = labels[iy, ix]
         if label >= 0:
-            res_img[by:ey, bx:ex] = sano.elements[label].patch
+            if color_map is None:
+                res_img[by:ey, bx:ex] = elements_set.elements[label].patch
+            else:
+                res_img[by:ey, bx:ex][elements_set.elements[label].shape] = color_map[iy, ix]
+                res_img[by:ey, bx:ex][~elements_set.elements[label].shape] = elements_set.background_color
     return res_img
 
 def show_elements_test(is_original):
@@ -123,20 +157,55 @@ def show_elements_test(is_original):
     axs[1][0].imshow(sano.patches[3])
     axs[1][1].imshow(sano.patches[4])
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description='sanogram.py')
+    parser.add_argument('--input', type=str, required=True,
+            help='input file name')
+    parser.add_argument('--block', type=int, default=None,
+            help='block size (in pixel)')
+    parser.add_argument('--quiet', action='store_true',
+            help='do not show the result')
+    parser.add_argument('--write_dir', type=str, default=None,
+            help='save the result to a directory')
+    parser.add_argument('--original', action='store_true',
+            help='use the "original"-like elements instead of "final"-like elements')
+    parser.add_argument('--error', type=str, default='gray',
+            help='error function used for optimization. [gray|color]')
+    parser.add_argument('--replace_color', type=str, default=None,
+            help='replace the color of elements from the input image. [direct|representative]')
+    return parser.parse_args()
+
 if __name__=='__main__':
     import sys
     import os
     import skimage.io
-    fn = sys.argv[1]
-    W = int(sys.argv[2])
+    args = parse_args()
+    fn = args.input
 
     img = skimage.io.imread(fn)
-    print 'Input Image: %dx%d, Block: %d, Filename: %s' % (img.shape[1], img.shape[0], W, os.path.basename(fn))
-    res = create_sanogram(img, W, ERROR_FUNCS['gray'])
-    fig, axs = plt.subplots(2, 1)
-    fig.suptitle('Input Image: %dx%d, Block: %d,\nFilename: %s' % (img.shape[1], img.shape[0], W, os.path.basename(fn)))
+    h, w = img.shape[:2]
+    if args.block is None:
+        block_px = max(8, min(w, h)/10)
+    else:
+        block_px = args.block
+
+    elements = SanoElementSet(block_px, args.original)
+
+    print 'Input Image: %dx%d, Block: %d, Filename: %s' % (w, h, block_px, os.path.basename(fn))
+    res = create_sanogram(elements, img, ERROR_FUNCS[args.error], replace_color=args.replace_color, n_colors=5)
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+    fig.suptitle('Sanogram of Size: %dx%d, Block: %d, Filename: %s' % (w, h, block_px, os.path.basename(fn)))
     axs[0].imshow(img)
     axs[1].imshow(res)
+    fig.tight_layout()
 
-    plt.show()
+    if args.write_dir is not None:
+        base, ext = os.path.splitext(os.path.basename(fn))
+        write_fn = os.path.join(args.write_dir, '%s_sanogram%s' % (base, ext))
+        fig.savefig(write_fn)
+        print 'wrote to:', write_fn
+
+    if not args.quiet:
+        plt.show()
 
