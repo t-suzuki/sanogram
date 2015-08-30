@@ -150,7 +150,8 @@ def create_sanogram(elements_set, img, error_func, replace_color=None, n_colors=
     return res_img
 
 def show_elements_test(is_original):
-    sano = SanoElementSet(W, False)
+    W = 32
+    sano = SanoElementSet(W, is_original)
     fig, axs = plt.subplots(2, 3)
     axs[0][0].imshow(sano.patches[0])
     axs[0][1].imshow(sano.patches[1])
